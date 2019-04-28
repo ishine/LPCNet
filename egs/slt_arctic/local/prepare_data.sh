@@ -28,7 +28,7 @@ config_dir=${corpus_dir}/config
 train_dir=${corpus_dir}/train
 test_dir=${corpus_dir}/test
 
-num_test_case=2
+num_test_case=100
 train_scp=$config_dir/train.scp
 test_scp=$config_dir/test.scp
 
@@ -40,6 +40,24 @@ set -euo pipefail
 [ ! -e $config_dir ] && mkdir -p $config_dir
 [ ! -e $train_dir ] && mkdir -p $train_dir
 [ ! -e $test_dir ] && mkdir -p $test_dir
+
+# trim silence and remain 100ms(20 frames) at the begining and the end of the audio
+
+if [ $stage -le -1 ];then
+  for x in ${wav_dir}/*.wav
+  do
+    x=${x##*/}
+    ${LPC_NET_dir}/pre-process/vad/apply-vad \
+        --frame-len=0.025 \
+        --frame-shift=0.005 \
+        --energy-thresh=1.5e7 \
+        --sil-to-speech-trigger=-20 \
+        --speech-to-sil-trigger=20 \
+        ${wav_dir}/$x \
+        ${wav_dir}/tmp-$x
+    mv ${wav_dir}/tmp-$x ${wav_dir}/$x
+  done
+fi
 
 if [ $stage -le 0 ];then
   for x in $wav_dir/*.wav
