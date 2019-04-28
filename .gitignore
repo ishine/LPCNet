@@ -70,3 +70,5 @@ src/nnet_data.o
 src/pitch.lo
 src/pitch.o
 stamp-h1
+tags
+egs/*
