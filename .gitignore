@@ -72,3 +72,4 @@ src/pitch.o
 stamp-h1
 tags
 egs/*
+src/__pycache__/
