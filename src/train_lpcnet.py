@@ -23,11 +23,15 @@
    LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+   Modified by npujocng@gmail.com (congjian) 2019
 '''
 
 # Train a LPCNet model (note not a Wavenet model)
 
+import argparse
 import lpcnet
+import os
 import sys
 import numpy as np
 from keras.optimizers import Adam
@@ -38,89 +42,91 @@ import h5py
 
 import tensorflow as tf
 from keras.backend.tensorflow_backend import set_session
-config = tf.ConfigProto()
 
-# use this option to reserve GPU memory, e.g. for running more than
-# one thing at a time.  Best to disable for GPUs with small memory
-# config.gpu_options.per_process_gpu_memory_fraction = 0.44
-config.gpu_options.allow_growth = True
+def train(args):
+    config = tf.ConfigProto()
+    # use this option to reserve GPU memory, e.g. for running more than
+    # one thing at a time.  Best to disable for GPUs with small memory
+    # config.gpu_options.per_process_gpu_memory_fraction = 0.44
+    config.gpu_options.allow_growth = True
+    set_session(tf.Session(config=config))
+    # Try reducing batch_size if you run out of memory on your GPU
+    model, _, _ = lpcnet.new_lpcnet_model(training=True)
+    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
+    model.summary()
 
-set_session(tf.Session(config=config))
+    frame_size = model.frame_size
+    nb_features = 55
+    nb_used_features = model.nb_used_features
+    feature_chunk_size = 15
+    pcm_chunk_size = frame_size*feature_chunk_size
 
-nb_epochs = 120
+    # u for unquantised, load 16 bit PCM samples and convert to mu-law
+    # 16 bit unsigned short PCM samples
+    data = np.fromfile(args.pcm_file, dtype='uint8')
+    nb_frames = len(data)//(4*pcm_chunk_size)
+    features = np.fromfile(args.feature_file, dtype='float32')
 
-# Try reducing batch_size if you run out of memory on your GPU
-batch_size = 64
+    # limit to discrete number of frames
+    data = data[:nb_frames*4*pcm_chunk_size]
+    features = features[:nb_frames*feature_chunk_size*nb_features]
+    features = np.reshape(features, (nb_frames*feature_chunk_size, nb_features))
+    sig = np.reshape(data[0::4], (nb_frames, pcm_chunk_size, 1))
+    pred = np.reshape(data[1::4], (nb_frames, pcm_chunk_size, 1))
+    in_exc = np.reshape(data[2::4], (nb_frames, pcm_chunk_size, 1))
+    out_exc = np.reshape(data[3::4], (nb_frames, pcm_chunk_size, 1))
+    del data
+    print("ulaw std = ", np.std(out_exc))
+    features = np.reshape(features, (nb_frames, feature_chunk_size, nb_features))
+    features = features[:, :, :nb_used_features]
+    features[:,:,18:36] = 0
+    fpad1 = np.concatenate([features[0:1, 0:2, :], features[:-1, -2:, :]], axis=0)
+    fpad2 = np.concatenate([features[1:, :2, :], features[0:1, -2:, :]], axis=0)
+    features = np.concatenate([fpad1, features, fpad2], axis=1)
+    periods = (.1 + 50*features[:,:,36:37]+100).astype('int16')
+    in_data = np.concatenate([sig, pred, in_exc], axis=-1)
 
-model, _, _ = lpcnet.new_lpcnet_model(training=True)
+    del sig
+    del pred
+    del in_exc
 
-model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
-model.summary()
+    # dump models to disk as we go
+    if not os.path.exists(args.model_dir):
+        os.mkdir(args.model_dir)
+    checkpoint_path = os.path.join(args.model_dir, 'lpcnet30_384_10_G16_{epoch:02d}.h5')
+    checkpoint = ModelCheckpoint(checkpoint_path)
 
-feature_file = sys.argv[1]
-pcm_file = sys.argv[2]     # 16 bit unsigned short PCM samples
-frame_size = model.frame_size
-nb_features = 55
-nb_used_features = model.nb_used_features
-feature_chunk_size = 15
-pcm_chunk_size = frame_size*feature_chunk_size
+    #Set this to True to adapt an existing model (e.g. on new data)
 
-# u for unquantised, load 16 bit PCM samples and convert to mu-law
+    if args.adaptation:
+        #Adapting from an existing model
+        model.load_weights(args.restore_model_path)
+        print("restore model from {}".format(args.restore_model_path))
+        sparsify = lpcnet.Sparsify(0, 0, 1, (0.05, 0.05, 0.2))
+        lr = 0.0001
+        decay = 0
+    else:
+        #Training from scratch
+        sparsify = lpcnet.Sparsify(2000, 40000, 400, (0.05, 0.05, 0.2))
+        lr = 0.001
+        decay = 5e-5
 
-data = np.fromfile(pcm_file, dtype='uint8')
-nb_frames = len(data)//(4*pcm_chunk_size)
+    model.compile(optimizer=Adam(lr, amsgrad=True, decay=decay),
+            loss='sparse_categorical_crossentropy')
+    model.save_weights(os.path.join(args.model_dir, 'lpcnet30_384_10_G16_00.h5'));
+    model.fit([in_data, features, periods], out_exc, batch_size=args.batch_size,
+            epochs=args.nb_epochs,
+            validation_split=0.0,
+            callbacks=[checkpoint, sparsify])
 
-features = np.fromfile(feature_file, dtype='float32')
-
-# limit to discrete number of frames
-data = data[:nb_frames*4*pcm_chunk_size]
-features = features[:nb_frames*feature_chunk_size*nb_features]
-
-features = np.reshape(features, (nb_frames*feature_chunk_size, nb_features))
-
-sig = np.reshape(data[0::4], (nb_frames, pcm_chunk_size, 1))
-pred = np.reshape(data[1::4], (nb_frames, pcm_chunk_size, 1))
-in_exc = np.reshape(data[2::4], (nb_frames, pcm_chunk_size, 1))
-out_exc = np.reshape(data[3::4], (nb_frames, pcm_chunk_size, 1))
-del data
-
-print("ulaw std = ", np.std(out_exc))
-
-features = np.reshape(features, (nb_frames, feature_chunk_size, nb_features))
-features = features[:, :, :nb_used_features]
-features[:,:,18:36] = 0
-
-fpad1 = np.concatenate([features[0:1, 0:2, :], features[:-1, -2:, :]], axis=0)
-fpad2 = np.concatenate([features[1:, :2, :], features[0:1, -2:, :]], axis=0)
-features = np.concatenate([fpad1, features, fpad2], axis=1)
-
-
-periods = (.1 + 50*features[:,:,36:37]+100).astype('int16')
-
-in_data = np.concatenate([sig, pred, in_exc], axis=-1)
-
-del sig
-del pred
-del in_exc
-
-# dump models to disk as we go
-checkpoint = ModelCheckpoint('lpcnet30_384_10_G16_{epoch:02d}.h5')
-
-#Set this to True to adapt an existing model (e.g. on new data)
-adaptation = False
-
-if adaptation:
-    #Adapting from an existing model
-    model.load_weights('lpcnet24c_384_10_G16_120.h5')
-    sparsify = lpcnet.Sparsify(0, 0, 1, (0.05, 0.05, 0.2))
-    lr = 0.0001
-    decay = 0
-else:
-    #Training from scratch
-    sparsify = lpcnet.Sparsify(2000, 40000, 400, (0.05, 0.05, 0.2))
-    lr = 0.001
-    decay = 5e-5
-
-model.compile(optimizer=Adam(lr, amsgrad=True, decay=decay), loss='sparse_categorical_crossentropy')
-model.save_weights('lpcnet30_384_10_G16_00.h5');
-model.fit([in_data, features, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify])
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('feature_file', type=str)
+    parser.add_argument('pcm_file', type=str)
+    parser.add_argument('--adaptation', default=False, action="store_true")
+    parser.add_argument('--restore_model_path', default='')
+    parser.add_argument('--batch_size', type=int,  default=64)
+    parser.add_argument('--nb_epochs', type=int, default=120)
+    parser.add_argument('--model_dir', default="exp/nnet")
+    args=parser.parse_args()
+    train(args)
