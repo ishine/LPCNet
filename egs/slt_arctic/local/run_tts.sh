@@ -31,7 +31,6 @@ test_dir=${corpus_dir}/test
 
 exp_dir=$current_working_dir/exp
 
-model=`ls $exp_dir/nnet | tail -n 1`
 
 stage=$1
 
@@ -44,8 +43,9 @@ fi
 
 # dump lpcnet
 if [ $stage -le 2 ]; then
+   model=`ls $exp_dir/nnet | tail -n 1`
    cd $LPC_NET_dir \
-    && CUDA_VISIBLE_DEVICES=1 python src/dump_lpcnet.py \
+    && CUDA_VISIBLE_DEVICES=0 python src/dump_lpcnet.py \
        $exp_dir/nnet/$model \
     && mv nnet_data.* src \
     && make \

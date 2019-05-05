@@ -6,7 +6,7 @@
 ######################################################################
 
 # step 1: prepare data
-./local/prepare_data.sh -1
+# ./local/prepare_data.sh -1
 
 # step 2: train model and decode
 ./local/run_tts.sh 0
