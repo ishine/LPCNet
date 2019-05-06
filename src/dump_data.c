@@ -42,7 +42,6 @@
 #include "lpcnet.h"
 #include "lpcnet_private.h"
 
-
 static void biquad(float *y, float mem[2], const float *x, const float *b, const float *a, int N) {
   int i;
   for (i=0;i<N;i++) {
@@ -111,6 +110,20 @@ static short float2short(float x)
   return IMAX(-32767, IMIN(32767, i));
 }
 
+
+int split(char dst[][200], char* str, const char* spl)
+{
+    int n = 0;
+    char *result = NULL;
+    result = strtok(str, spl);
+    while( result != NULL ){
+      strcpy(dst[n++], result);
+      result = strtok(NULL, spl);
+    }
+    return n;
+}
+
+
 int main(int argc, char **argv) {
   int i;
   int count=0;
@@ -124,6 +137,7 @@ int main(int argc, char **argv) {
   float x[FRAME_SIZE];
   int gain_change_count=0;
   FILE *f1;
+  FILE *f2;
   FILE *ffeat;
   FILE *fpcm=NULL;
   short pcm[FRAME_SIZE]={0};
@@ -141,6 +155,7 @@ int main(int argc, char **argv) {
   int encode = 0;
   int decode = 0;
   int quantize = 0;
+  char temp[1024] ; 
   st = lpcnet_encoder_create();
   if (argc == 5 && strcmp(argv[1], "-train")==0) training = 1;
   if (argc == 5 && strcmp(argv[1], "-qtrain")==0) {
@@ -168,13 +183,20 @@ int main(int argc, char **argv) {
   }
   f1 = fopen(argv[2], "r");
   if (f1 == NULL) {
-    fprintf(stderr,"Error opening input .s16 16kHz speech input file: %s\n", argv[2]);
+    fprintf(stderr,"Error opening input pcm file list: %s\n", argv[2]);
     exit(1);
   }
-  ffeat = fopen(argv[3], "w");
-  if (ffeat == NULL) {
-    fprintf(stderr,"Error opening output feature file: %s\n", argv[3]);
-    exit(1);
+
+  if (training == 0){
+    strcpy(temp,argv[3]);
+    //temp =  argv[3];  // the path of  features
+  }
+  else if (training == 1){
+    ffeat = fopen(argv[3], "w");
+    if (ffeat == NULL) {
+      fprintf(stderr,"Error opening output feature file: %s\n", argv[3]);
+      exit(1);
+    }
   }
   if (decode) {
     float vq_mem[NB_BANDS] = {0};
@@ -200,79 +222,113 @@ int main(int argc, char **argv) {
       exit(1);
     }
   }
-  while (1) {
-    float E=0;
-    int silent;
-    for (i=0;i<FRAME_SIZE;i++) x[i] = tmp[i];
-    fread(tmp, sizeof(short), FRAME_SIZE, f1);
-    if (feof(f1)) {
-      if (!training) break;
-      rewind(f1);
-      fread(tmp, sizeof(short), FRAME_SIZE, f1);
-      one_pass_completed = 1;
-    }
-    for (i=0;i<FRAME_SIZE;i++) E += tmp[i]*(float)tmp[i];
-    if (training) {
-      silent = E < 5000 || (last_silent && E < 20000);
-      if (!last_silent && silent) {
-        for (i=0;i<FRAME_SIZE;i++) savedX[i] = x[i];
-      }
-      if (last_silent && !silent) {
-          for (i=0;i<FRAME_SIZE;i++) {
-            float f = (float)i/FRAME_SIZE;
-            tmp[i] = (int)floor(.5 + f*tmp[i] + (1-f)*savedX[i]);
-          }
-      }
-      if (last_silent) {
-        last_silent = silent;
-        continue;
-      }
-      last_silent = silent;
-    }
-    if (count*FRAME_SIZE_5MS>=10000000 && one_pass_completed) break;
-    if (training && ++gain_change_count > 2821) {
-      float tmp;
-      speech_gain = pow(10., (-20+(rand()%40))/20.);
-      if (rand()%20==0) speech_gain *= .01;
-      if (rand()%100==0) speech_gain = 0;
-      gain_change_count = 0;
-      rand_resp(a_sig, b_sig);
-      tmp = (float)rand()/RAND_MAX;
-      noise_std = 10*tmp*tmp;
-    }
-    biquad(x, mem_hp_x, x, b_hp, a_hp, FRAME_SIZE);
-    biquad(x, mem_resp_x, x, b_sig, a_sig, FRAME_SIZE);
-    preemphasis(x, &mem_preemph, x, PREEMPHASIS, FRAME_SIZE);
-    for (i=0;i<FRAME_SIZE;i++) {
-      float g;
-      float f = (float)i/FRAME_SIZE;
-      g = f*speech_gain + (1-f)*old_speech_gain;
-      x[i] *= g;
-    }
-    for (i=0;i<FRAME_SIZE;i++) x[i] += rand()/(float)RAND_MAX - .5;
-    /* PCM is delayed by 1/2 frame to make the features centered on the frames. */
-    for (i=0;i<FRAME_SIZE-TRAINING_OFFSET;i++) pcm[i+TRAINING_OFFSET] = float2short(x[i]);
-    compute_frame_features(st, x);
 
-    RNN_COPY(&pcmbuf[st->pcount*FRAME_SIZE], pcm, FRAME_SIZE);
-    if (fpcm) {
-        compute_noise(&noisebuf[st->pcount*FRAME_SIZE], noise_std);
+  char filename[1024];
+  while(1) {
+    fgets(filename, 1024, f1);
+    if (feof(f1)) break;
+    *strchr(filename, '\n') = '\0';
+    fprintf(stdout, "Processing %s\n", filename);
+    f2 = fopen(filename, "r");
+    if (f2 == NULL) {
+      fprintf(stderr,"Error opening input .s16 16kHz speech input file: %s\n", filename);
+      exit(1);
     }
-    st->pcount++;
-    /* Running on groups of 4 frames. */
-    if (st->pcount == 4) {
-      unsigned char buf[8];
-      process_superframe(st, buf, ffeat, encode, quantize);
-      if (fpcm) write_audio(st, pcmbuf, noisebuf, fpcm);
-      st->pcount = 0;
+    if (training ==0) {
+      char dst[20][200];
+      char dst2[20][200];
+      int cnt  = split(dst, filename, "/");
+      int cnt2 = split(dst2, dst[cnt-1],".");
+      char ffture[1024];
+      strcpy(ffture, temp);
+      strcat(ffture, dst2[0]);
+      strcat(ffture, ".f32");
+
+      fprintf(stdout, "Processing %s\n", ffture);
+      ffeat = fopen(ffture,"w");
+      if (ffeat == NULL) {
+        fprintf(stderr,"Error opening output  file: %s\n", ffture);
+        exit(1);
+      }
     }
-    //if (fpcm) fwrite(pcm, sizeof(short), FRAME_SIZE, fpcm);
-    for (i=0;i<TRAINING_OFFSET;i++) pcm[i] = float2short(x[i+FRAME_SIZE-TRAINING_OFFSET]);
-    old_speech_gain = speech_gain;
-    count++;
+    while (1) {
+      float E=0;
+      int silent;
+      for (i=0;i<FRAME_SIZE;i++) x[i] = tmp[i];
+      fread(tmp, sizeof(short), FRAME_SIZE, f2);
+      if (feof(f2)) break;
+
+      for (i=0;i<FRAME_SIZE;i++) E += tmp[i]*(float)tmp[i];
+      if (training) {
+        silent = E < 5000 || (last_silent && E < 20000);
+        if (!last_silent && silent) {
+          for (i=0;i<FRAME_SIZE;i++) savedX[i] = x[i];
+        }
+        if (last_silent && !silent) {
+            for (i=0;i<FRAME_SIZE;i++) {
+              float f = (float)i/FRAME_SIZE;
+              tmp[i] = (int)floor(.5 + f*tmp[i] + (1-f)*savedX[i]);
+            }
+        }
+        if (last_silent) {
+          last_silent = silent;
+          continue;
+        }
+        last_silent = silent;
+      }
+
+      if (training && ++gain_change_count > 2821) {
+        float tmp;
+        speech_gain = pow(10., (-20+(rand()%40))/20.);
+        if (rand()%20==0) speech_gain *= .01;
+        if (rand()%100==0) speech_gain = 0;
+        gain_change_count = 0;
+        rand_resp(a_sig, b_sig);
+        tmp = (float)rand()/RAND_MAX;
+        noise_std = 4*tmp*tmp;
+      }
+      biquad(x, mem_hp_x, x, b_hp, a_hp, FRAME_SIZE);
+      biquad(x, mem_resp_x, x, b_sig, a_sig, FRAME_SIZE);
+      preemphasis(x, &mem_preemph, x, PREEMPHASIS, FRAME_SIZE);
+      for (i=0;i<FRAME_SIZE;i++) {
+        float g;
+        float f = (float)i/FRAME_SIZE;
+        g = f*speech_gain + (1-f)*old_speech_gain;
+        x[i] *= g;
+      }
+      for (i=0;i<FRAME_SIZE;i++) 
+        x[i] += rand()/(float)RAND_MAX - .5;
+      /* PCM is delayed by 1/2 frame to make the features centered on the frames. */
+      for (i=0;i<FRAME_SIZE-TRAINING_OFFSET;i++) 
+        pcm[i+TRAINING_OFFSET] = float2short(x[i]);
+      compute_frame_features(st, x);
+  
+      RNN_COPY(&pcmbuf[st->pcount*FRAME_SIZE], pcm, FRAME_SIZE);
+      if (fpcm) {
+          compute_noise(&noisebuf[st->pcount*FRAME_SIZE], noise_std);
+      }
+      st->pcount++;
+      /* Running on groups of 4 frames. */
+      if (st->pcount == 4) {
+        unsigned char buf[8];
+        process_superframe(st, buf, ffeat, encode, quantize);
+        if (fpcm) write_audio(st, pcmbuf, noisebuf, fpcm);
+        st->pcount = 0;
+      }
+      //if (fpcm) fwrite(pcm, sizeof(short), FRAME_SIZE, fpcm);
+      for (i=0;i<TRAINING_OFFSET;i++) pcm[i] = float2short(x[i+FRAME_SIZE-TRAINING_OFFSET]);
+      old_speech_gain = speech_gain;
+      count++;
+    }
+    fclose(f2);
+    if (training==0){
+      fclose(ffeat);
+    }
   }
   fclose(f1);
-  fclose(ffeat);
+  if (training){
+    fclose(ffeat);
+  }
   if (fpcm) fclose(fpcm);
   lpcnet_encoder_destroy(st);
   return 0;
