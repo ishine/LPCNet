@@ -89,9 +89,11 @@ if [ $stage -le 3 ];then
 fi
 
 if [ $stage -le 5 ];then
+    echo "convert feature_55 to feature_22"
     python $LPC_NET_dir/tools/scripts/55to20.py \
         $train_dir/ \
         $feature_20_train
+    echo "cmvn and min_max norm to -4~4"
     python $LPC_NET_dir/tools/scripts/cmvn.py \
         --input_dir=$feature_20_train \
         --output_dir=$corpus_dir/bark_cmvn \
