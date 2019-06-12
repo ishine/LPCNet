@@ -34,7 +34,7 @@ train_scp=$config_dir/train.scp
 test_scp=$config_dir/test.scp
 all_scp=$config_dir/all.scp
 
-stage=0
+stage=-1
 
 set -euo pipefail
 
@@ -51,7 +51,7 @@ if [ $stage -le -1 ];then
   for x in ${wav_dir}/*.wav
   do
     x=${x##*/}
-    ${LPC_NET_dir}/pre-process/vad/apply-vad \
+    ${LPC_NET_dir}/tools/pre-process/vad/apply-vad \
         --frame-len=0.025 \
         --frame-shift=0.005 \
         --energy-thresh=1.5e7 \
