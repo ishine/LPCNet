@@ -24,15 +24,16 @@ def process_in_each_thread(line, apply_cmvn):
 
 def convert_to(apply_cmvn):
     file_name = os.listdir(FLAGS.input_dir)
-    pool = multiprocessing.Pool(FLAGS.num_threads)
-    workers = []
+    # pool = multiprocessing.Pool(FLAGS.num_threads)
+    # workers = []
     for line in file_name:
         line = line.strip()
         print("Processing file %s " % line)
-        workers.append(pool.apply_async(
-            process_in_each_thread, (line, apply_cmvn)))
-    pool.close()
-    pool.join()
+        process_in_each_thread(line, apply_cmvn)
+        # workers.append(pool.apply_async(
+        #    process_in_each_thread, (line, apply_cmvn)))
+    # pool.close()
+    # pool.join()
 
 def main(unused_argv):
     convert_to(apply_cmvn=True)
@@ -84,7 +85,7 @@ if __name__== '__main__':
     parser.add_argument(
         '--bark_cmvn_file',
         type=str,
-        default='bark_cmvn.npy'
+        default='bark_cmvn.npz'
     )
     parser.add_argument(
         '--max_num_file',
